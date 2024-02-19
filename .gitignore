@@ -1,7 +1,4 @@
 .DS_Store
 .gitattributes
-data/tjornarp_pop.csv
-data/sunspots_y.csv
-data/recessions.csv
-data/marriage.csv
 .project
+/.vscode/
