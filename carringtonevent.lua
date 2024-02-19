@@ -22,9 +22,6 @@ local p_option = require "core/params/option"
 -- Import csv library: https://github.com/geoffleyland/lua-csv
 local csv = include("lib/csv")
 
--- Specify csv separator (defaults to ",")
-local sep = ",";
-
 -- Import chart library:
 local Graph = include("lib/lightergraph")
 chart = {}       -- line chart
@@ -555,8 +552,8 @@ function list_file_names(callback)
         callback()
     end
 
-    norns.system_cmd('find ' .. _path.data ..
-        'loudnumbers_norns/csv -name *.csv', cb)
+    norns.system_cmd('find ' .. _path.code ..
+        'carringtonevent -name *.csv', cb)
 end
 
 -- Reloads the data once a new csv file is selected
@@ -569,7 +566,7 @@ function reload_data()
     -- open the file
     f = csv.open(_path.data .. "loudnumbers_norns/csv/" ..
         file_names[params:get("data file")] .. ".csv",
-        { separator = sep, header = true })
+        { separator = ",", header = true })
 
     -- loop through each line
     for fields in f:lines() do
