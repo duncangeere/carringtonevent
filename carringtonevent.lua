@@ -1,23 +1,14 @@
--- loudnumbers_norns
--- v0.17 @duncangeere
--- https://llllllll.co/t/51353
+-- carringtonevent
+-- v0.1 @duncangeere
 --
+-- carrington event
 -- data sonification with Norns
 --
--- K1 + E1 select data column
--- KEY 2 toggle play/pause
--- KEY 3 toggle loop
--- ENC 1 select bpm
--- ENC 2 select root note
--- ENC 3 select scale
+-- ENC 3: select duration
+-- KEY 3: toggle play/pause
+-- KEY 2: reset and stop
 --
 -- Crow support
--- IN1 = clock
--- IN2 = play next note when a
---      trigger is received
---
--- OUT1 = note (1V/oct)
--- OUT2 = trigger
 -- OUT3 = control voltage
 -- OUT4 = control voltage
 --
@@ -25,14 +16,6 @@
 music = require("musicutil")
 -- Import musicutil library: https://monome.org/docs/norns/reference/lib/musicutil
 
--- Move files to data folder if not there already
-if not util.file_exists(_path.data .. "loudnumbers_norns/csv/_temperature.csv") then
-    os.execute("mkdir " ..
-        _path.data ..
-        "loudnumbers_norns/csv/ && mv " ..
-        _path.code ..
-        "loudnumbers_norns/ignorethisfolder/_temperature.csv " .. _path.data .. "loudnumbers_norns/csv/_temperature.csv")
-end
 -- Import library to update parameters (Thanks Eigen!)
 local p_option = require "core/params/option"
 
