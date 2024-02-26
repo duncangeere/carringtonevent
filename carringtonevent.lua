@@ -9,8 +9,10 @@
 -- KEY 2: reset and stop
 --
 -- Crow support
--- OUT3 = control voltage
--- OUT4 = control voltage
+-- OUT1 = declination voltage
+-- OUT2 = declination voltage
+-- OUT3 = horizontal force voltage
+-- OUT4 = storm voltage
 --
 --
 music = require("musicutil")
@@ -24,8 +26,8 @@ local csv = include("lib/csv")
 
 -- Import chart library:
 local Graph = include("lib/lightergraph")
-chart = {}       -- line chart
-chart_point = {} -- highlighting active point
+chart = {}       -- line chart higher
+chart_point = {} -- highlighting active point higher
 spacing = 2
 
 engine.name = "PolyPerc"
@@ -44,167 +46,39 @@ function init()
     data = { 1, 2, 3, 4, 5, 6, 7, 8 }
 
     columns = {}
+    declinationcolumn = 2
+    horizforcecolum = 3
+    stormcolumn = 4
+    data_length = 240
 
-    -- Sound variables
-    sync = 1 / 2
+    -- Sync variables
+    sync = 1
+    timer = 0
 
     -- SETTING UP
-    -- Get list of file names in folder
-    file_names = {}
+    file_name = "data"
     headers = {}
     grid_drawn = {}
+    flash = 0;
     loaded = false
-
-    list_file_names(
-        function() -- this runs slowly, so we need a callback for what happens next
-            params:add {
-                type = "option",
-                id = "column",
-                name = "data column",
-                options = headers,
-                default = 1,
-                action = function() update_data() end
-            }
-
-            -- Load the data column
-            update_data()
-            scale_data()
-
-            loaded = true -- track whether data is loaded yet for UI purposes
-        end)
-
-    -- setting root note using params
-    params:add {
-        type = "number",
-        id = "root_note",
-        name = "root note",
-        min = 0,
-        max = 127,
-        default = math.random(50, 70),
-        formatter = function(param)
-            return music.note_num_to_name(param:get(), true)
-        end,
-        action = function() build_scale() end
-    } -- by employing build_scale() here, we update the scale every time the rootnote changes
-
-    -- setting scale type using params
-    scale_names = {}
-    for i = 1, #music.SCALES do
-        table.insert(scale_names, music.SCALES[i].name)
-    end
-
-    params:add {
-        type = "option",
-        id = "scale",
-        name = "scale",
-        options = scale_names,
-        default = math.random(#scale_names),
-        action = function() build_scale() end -- update the scale when it's changed
-    }
-
-    -- setting how many notes from the scale can be played
-    params:add {
-        type = "number",
-        id = "note_pool_size",
-        name = "note pool size",
-        min = 1,
-        max = 32,
-        default = 16,
-        action = function() -- update the scale when it's changed
-            build_scale()
-            scale_data()    -- we also need to scale the data again
-        end
-    }
-
-    -- setting the whether it loops or not
-    params:add {
-        type = "binary",
-        id = "looping",
-        name = "looping",
-        behavior = "toggle",
-        default = 1
-    }
-
-    -- CROW
-    params:add_separator("crow")
-
-    -- Set up Crow to accept pulses
-    -- setting whether crow accepts pulses or not
-    params:add {
-        type = "binary",
-        id = "crowpulses",
-        name = "accept crow pulses",
-        behavior = "toggle",
-        default = 0
-    }
-
-    -- Report when turned on and off
-    params:set_action("crowpulses", function()
-        if params:get("crowpulses") == 1 then
-            print("Listening for triggers on crow IN2...")
-        elseif params:get("crowpulses") == 0 then
-            print("No longer listening for triggers on crow IN2.")
-        end
-    end)
-
-    crow.input[2].change = crow_pulse
-    crow.input[2].mode("change", 2.0, 0.25, "rising")
-
-    -- Setting length of gates sent by crow
-    params:add_control("crow_length", "crow note length (s)",
-        controlspec.new(0.01, 1, "lin", 0.01, 0.05))
-
-    -- MIDI
-    params:add_separator("MIDI")
-
-    -- Midi channel number
-    params:add {
-        type = "number",
-        id = "midi_channel",
-        name = "MIDI channel number",
-        min = 1,
-        max = 16,
-        default = 1
-    }
-
-    -- Midi options
-    params:add_binary("send_midi_notes", "Play MIDI notes?", "toggle", 1)
-    params:add_binary("send_midi_cc", "Send MIDI CC?", "toggle", 0)
-
-    -- Midi gate length
-    params:add_control("midi_length", "MIDI note length (s)",
-        controlspec.new(0.01, 5, "lin", 0.01, 0.1))
-
-    params:add {
-        type = "number",
-        id = "midi_cc",
-        name = "MIDI CC number",
-        min = 0,
-        max = 127,
-        default = 1
-    }
-
-    params:add {
-        type = "number",
-        id = "midi_cc_min",
-        name = "MIDI CC output min",
-        min = 0,
-        max = 126,
-        default = 0
-    }
-
-    params:add {
-        type = "number",
-        id = "midi_cc_max",
-        name = "MIDI CC output max",
-        min = 1,
-        max = 127,
-        default = 127
-    }
-
 
     -- DATA
     params:add_separator("data")
+
+    -- Add a duration parameters
+    params:add {
+        type = "number",
+        id = "duration",
+        name = "duration (mins)",
+        min = 1,
+        max = 30,
+        default = 15,
+        action = function() -- set the bpm when duration is changed
+            params:set("clock_tempo", data_length / params:get("duration"))
+            screen_dirty = true
+            grid_dirty = true
+        end
+    }
 
     -- add datamin and datamax parameters
     params:add {
@@ -240,18 +114,69 @@ function init()
         end
     }
 
-    build_scale()         -- builds initial scale
-    update_data_range()   -- updates the range of the data
-    scale_data()          -- scales the data to the notes
+    -- CROW
+    -- Setting slew of outputs
+    crow.output[1].slew = 1.0
+    crow.output[2].slew = 1.0
+    crow.output[3].slew = 1.0
+    crow.output[4].slew = 1.0
+
+    -- MIDI
+    params:add_separator("MIDI")
+
+    -- Midi channel number
+    params:add {
+        type = "number",
+        id = "midi_channel",
+        name = "MIDI channel number",
+        min = 1,
+        max = 16,
+        default = 1
+    }
+
+    -- Midi options
+    params:add_binary("send_midi_cc", "Send MIDI CC?", "toggle", 1)
+
+    -- Midi gate length
+    params:add_control("midi_length", "MIDI note length (s)",
+        controlspec.new(0.01, 5, "lin", 0.01, 0.1))
+
+    params:add {
+        type = "number",
+        id = "midi_cc",
+        name = "MIDI CC number",
+        min = 0,
+        max = 127,
+        default = 1
+    }
+
+    params:add {
+        type = "number",
+        id = "midi_cc_min",
+        name = "MIDI CC output min",
+        min = 0,
+        max = 126,
+        default = 0
+    }
+
+    params:add {
+        type = "number",
+        id = "midi_cc_max",
+        name = "MIDI CC output max",
+        min = 1,
+        max = 127,
+        default = 127
+    }
+
+    reload_data()         -- initial load of data
+    scale_data()          -- scale the data
 
     position = 1          -- Set initial position at start of data
     clock_playing = false -- whether notes are playing
-    key1_down = false     -- whether key1 is depressed
     screen_dirty = true   -- track whether screen needs redrawing
     grid_dirty = true     -- track whether grid needs redrawing
 
-    -- Start a clock to refresh the screen
-    redraw_clock_id = clock.run(redraw_clock)
+    -- Start a clock to refresh the grid
     redraw_grid_clock_id = clock.run(redraw_grid_clock)
 end
 
@@ -259,34 +184,58 @@ function redraw()
     -- clear the screen
     screen.clear()
 
+    -- flash rectangle across whole screen
+    if flash > 0 then
+        if columns.storm[position] == 1 then
+            screen.level(10)
+        elseif columns.storm[position] == 0.5 then
+            screen.level(1)
+        else
+            screen.level(0)
+        end
+        screen.rect(0, 0, 128, 64)
+        screen.fill()
+    end
+
     if loaded then
         -- Redraw background chart
         chart:redraw()
         chart_point:redraw()
     end
 
+    -- Sync bpm to duration
+    params:set("clock_tempo", data_length / params:get("duration"))
+    params:bang()
+
     -- Text bits
     screen.level(15)
+    screen.font_size(8)
+    screen.font_face(1)
 
     screen.move(spacing + 1, 5)
-    screen.text(loaded and (headers[params:get("column")]) or "loading...")
+    screen.text(loaded and (string.format("declination: %.0f", columns.declination[position]) or "loading..."))
+    screen.move(spacing + 1, 13)
+    screen.text(loaded and (string.format("horiz force: %.0f", columns.horizforce[position]) or "loading..."))
 
     screen.move(spacing + 1, 62)
     screen.text(clock_playing and "||" or "▶")
 
-    screen.move(10, 62)
-    screen.text((params:get("looping") == 1) and "&" or "")
+    screen.move(128 - 2, 5)
+    screen.text_right(string.format("%.0fbpm", clock.get_tempo()))
 
-    screen.move(128 - 6 - screen.text_extents(scale_names[params:get("scale")]),
-        62)
-    screen.text_right(music.note_num_to_name(params:get("root_note"), true))
+    screen.move(128 - 2, 13)
+    screen.text_right(string.format("%.0f mins", params:get("duration")))
+
+    screen.move(128 - 2, 21)
+    -- create a timestring with minutes and seconds as 00m00s
+    local timestring = string.format("%02.f", timer / 60) .. "m" .. string.format("%02.f", timer % 60) .. "s"
+    screen.text_right(timestring)
 
     screen.move(128 - 2, 62)
-    screen.text_right(scale_names[params:get("scale")])
-
-    screen.move(128 - 2, 5)
-    crow_dot = params:get("crowpulses") == 1 and "." or ""
-    screen.text_right(crow_dot .. string.format("%.0fbpm", clock.get_tempo()))
+    screen.font_face(18)
+    screen.font_size(10)
+    screen.level(3 + (10 * columns.storm[position]))
+    screen.text_right("fret: " .. columns.fret[position])
 
     -- trigger a screen update
     screen.update()
@@ -311,37 +260,42 @@ function redraw_grid()
         end
     end
 
+    -- flash the grid
+    if flash > 0 then
+        flash = 0
+    else
+        flash = flash + 1
+    end
+
+    local flashbrightness = 0
+    if columns.storm[position] == 0.5 then flashbrightness = 3 end
+    if columns.storm[position] == 1 then flashbrightness = 15 end
+
+    -- light the top row of the grid if a storm is happening
+    for i = 1, g.cols do
+        if columns.storm[position] >= 0.5 and flash > 0 then
+            g:led(i, 1, flashbrightness)
+        end
+    end
+
     -- trigger a grid update
     g:refresh()
 end
 
 -- start playing the notes
 function play_note()
-    -- Get the note
-    note = scaled_data[position]
-    volts = map(note, 1, params:get("note_pool_size"), 0, 10, true)
-    volts = map(data[position], params:get("datamin"), params:get("datamax"), 0, 10, true)
+    declination_volts = map(columns.declination[position], params:get("datamin"), params:get("datamax"), 0, 10, true)
+    horizforce_volts = map(columns.horizforce[position], params:get("datamin"), params:get("datamax"), 0, 10, true)
+    storm_volts = map(columns.storm[position], params:get("datamin"), params:get("datamax"), 0, 5, true)
 
-    -- Play note from Norns
-    engine.hz(notes_freq[note])
-
-    -- Send trigger to Crow
-    crow.output[2].action = "pulse(" .. params:get('crow_length') .. ")"
-    crow.output[2]() -- thanks zbs & eigen <3
-
-    -- Output v/oct
-    crow.output[1].volts = (notes_nums[note] - 48) / 12
-
-    -- Output voltage
-    crow.output[3].volts = -5 + volts
-    crow.output[4].volts = volts
+    -- Send crow outputs
+    crow.output[1].volts = declination_volts
+    crow.output[2].volts = declination_volts
+    crow.output[3].volts = horizforce_volts
+    crow.output[4].volts = storm_volts
 
     -- Play midi
     if midi.devices ~= nil then
-        -- If midi note is being sent, send it
-        if params:get("send_midi_notes") == 1 then
-            play_midi_note(notes_nums[note])
-        end
         -- If midi cc is being sent, send it
         if params:get("send_midi_cc") == 1 then
             -- Calculate CC value to send
@@ -361,16 +315,42 @@ function play_note()
     end
 end
 
-function crow_pulse()
-    -- Check if crow should be playing
-    if params:get("crowpulses") == 1 then
-        play_note()
-        increment_position()
-    else
-        -- Otherwise print an error message
-        print(
-            "Crow is not expecting to receieve triggers, turn it on in parameters.")
+-- when a key is depressed
+function key(n, z)
+    -- Button 2: play/pause
+    if n == 2 and z == 1 then
+        if not clock_playing then
+            if midi.devices ~= nil then my_midi:start() end
+            play = clock.run(function()
+                while true do
+                    -- Sync to the clock
+                    clock.sync(sync)
+
+                    -- Play a note
+                    play_note()
+
+                    -- Increment position
+                    increment_position()
+
+                    timer = position * clock.get_beat_sec()
+                end
+            end) -- starts the clock coroutine
+            clock_playing = true
+        elseif clock_playing then
+            stop_play()
+        end
     end
+
+    -- Button 3: reset and stop
+    if n == 3 and z == 1 then
+        position = 1
+        timer = 0
+        stop_play()
+        update_chart()
+    end
+
+    screen_dirty = true
+    grid_dirty = true
 end
 
 -- stops the coroutine playing the notes
@@ -380,76 +360,16 @@ function stop_play()
     clock_playing = false
 end
 
--- when a key is depressed
-function key(n, z)
-    -- Button 1: track whether it's pressed
-    if n == 1 and z == 1 then key1_down = true end
-    if n == 1 and z == 0 then key1_down = false end
-
-    -- Button 2: play/pause and toggle accepting crow triggers if key1 is pressed
-    if n == 2 and z == 1 then
-        if (key1_down == true) then
-            -- Toggle accepting crow triggers
-            if params:get("crowpulses") == 0 then
-                params:set("crowpulses", 1)
-            elseif params:get("crowpulses") == 1 then
-                params:set("crowpulses", 0)
-            end
-        elseif (key1_down == false) then
-            if not clock_playing then
-                if midi.devices ~= nil then my_midi:start() end
-                play = clock.run(function()
-                    while true do
-                        -- Sync to the clock
-                        clock.sync(sync)
-
-                        -- Play a note
-                        play_note()
-
-                        -- Increment position
-                        increment_position()
-                    end
-                end) -- starts the clock coroutine
-                clock_playing = true
-            elseif clock_playing then
-                stop_play()
-            end
-        end
-    end
-
-    if n == 3 and z == 1 then
-        if params:get("looping") == 0 then
-            params:set("looping", 1)
-        elseif params:get("looping") == 1 then
-            params:set("looping", 0)
-        end
-    end
-
-    screen_dirty = true
-    grid_dirty = true
-end
-
 -- when an encoder is twiddled
 function enc(n, d)
-    -- ENC 1 select bpm when key1 is not down
-    if (n == 1) and (key1_down == false) then
-        params:set("clock_tempo", params:get("clock_tempo") + d)
+    -- ENC 3 select bpm
+    if (n == 3) then
+        params:set("duration", params:get("duration") + d)
     end
 
-    -- ENC 1 select column when key1 is down
-    if (n == 1) and (key1_down == true) then
-        params:set("column", util.clamp(params:get("column") + d, 1, #headers))
-    end
-
-    -- ENC 2 select root note
-    if n == 2 then params:set("root_note", params:get("root_note") + d) end
-
-    -- ENC 3 select scale
-    if n == 3 then
-        params:set("scale", util.clamp(params:get("scale") + d, 1, #scale_names))
-    end
-
+    params:bang()
     screen_dirty = true
+    grid_dirty = true
 end
 
 -- Function to map values from one range to another
@@ -468,25 +388,11 @@ function map(n, start, stop, newStart, newStop, withinBounds)
     end
 end
 
--- Build the scale
-function build_scale()
-    notes_nums = music.generate_scale_of_length(params:get("root_note"),
-        params:get("scale"),
-        params:get("note_pool_size")) -- builds scale
-    -- converts note numbers to an array of frequencies
-    notes_freq = music.note_nums_to_freqs(notes_nums)
-end
-
--- Scale the data to the pool size
+-- Scale the data to the grid
 function scale_data()
-    scaled_data = {}
-
-    for i = 1, #data do
-        table.insert(scaled_data, math.floor(
-            map(data[i], params:get("datamin"), params:get("datamax"), 1,
-                params:get("note_pool_size"), true)))
+    if g.device ~= nil then
+        grid_drawn = { table.unpack(data, position, position + (g.cols - 1)) }
     end
-    grid_drawn = { table.unpack(data, 1, g.device ~= nil and g.cols or 16) }
 end
 
 -- Updates graph y-axes
@@ -502,58 +408,27 @@ end
 
 -- Adds 1 to the position and resets if it gets to the end of the data
 function increment_position()
-    chart_point:remove_all_points()
-    chart_point:add_point(position, data[position], "lin", true)
+    update_chart()
 
-    if ((position == #data) and params:get("looping") == 1) then
-        position = 1
-    elseif ((position == #data) and (params:get("looping") == 0)) then
-        position = 1
+    if (position == #data) then
         stop_play()
-        params:set("crowpulses", 0)
     else
         position = position + 1
     end
-    grid_drawn = { table.unpack(data, position, position + 15) }
+
+    if g.device ~= nil then
+        grid_drawn = { table.unpack(data, position, position + (g.cols - 1)) }
+    end
 
     screen_dirty = true
     grid_dirty = true
 end
 
--- Lists out available CSV files then reloads the data
-function list_file_names(callback)
-    local cb = function(text)
-        -- Get a list of filenames
-        for line in string.gmatch(text, "/[%w%s_]+.csv") do
-            name = string.sub(line, 2, -5)
-            table.insert(file_names, name)
-        end
-        table.sort(file_names)
-
-        -- Log to the console the csv files it's seeing
-        print("CSV files found:")
-        tab.print(file_names)
-
-        -- setting the filename to use
-        params:add {
-            type = "option",
-            id = "data file",
-            name = "data filename",
-            options = file_names,
-            default = 1,
-            action = function()
-                reload_data()
-                update_param_options("column", headers)
-                update_data()
-            end
-        }
-
-        reload_data() -- get the data
-        callback()
-    end
-
-    norns.system_cmd('find ' .. _path.code ..
-        'carringtonevent -name *.csv', cb)
+function update_chart()
+    chart_point:remove_all_points()
+    chart_point:add_point(position, data[position], "lin", true)
+    screen_dirty = true
+    grid_dirty = true
 end
 
 -- Reloads the data once a new csv file is selected
@@ -563,9 +438,12 @@ function reload_data()
     columns = {}
     counter = 1;
 
+    print(_path.code .. "carringtonevent" ..
+        file_name .. ".csv")
+
     -- open the file
-    f = csv.open(_path.data .. "loudnumbers_norns/csv/" ..
-        file_names[params:get("data file")] .. ".csv",
+    f = csv.open(_path.code .. "carringtonevent/" ..
+        file_name .. ".csv",
         { separator = ",", header = true })
 
     -- loop through each line
@@ -579,7 +457,7 @@ function reload_data()
             end
 
             -- otherwise add the data
-            table.insert(columns[i], tonumber(v) ~= nil and tonumber(v) or nil)
+            table.insert(columns[i], tonumber(v) ~= nil and tonumber(v) or v)
         end
     end
 
@@ -587,26 +465,28 @@ function reload_data()
 
     print("column headers found:")
     tab.print(headers)
+    update_data()
+    loaded = true
 end
 
 -- Runs when a new column is selected and when a new csv file is selected in params
 function update_data()
-    print("Loading column " .. headers[params:get("column")])
-    data = columns[headers[params:get("column")]]
+    print("Loading column " .. headers[declinationcolumn])
+    data = columns[headers[declinationcolumn]]
     position = 1
 
     update_data_range()
 
     -- Define the chart
     chart = Graph.new(1, #data, "lin", params:get("datamin"), params:get("datamax"), "lin", "line", false, false)
-    chart:set_position_and_size(1 + spacing, 10, 128 - (spacing * 2), 44)
+    chart:set_position_and_size(1 + spacing, 10, 128 - (spacing * 2), 52)
     -- Add data to it
     for i = 1, #data do chart:add_point(i, data[i]) end
 
     -- Make a chart with a single point
     chart_point = Graph.new(1, #data, "lin", params:get("datamin"), params:get("datamax"), "lin", "point", false,
         false)
-    chart_point:set_position_and_size(1 + spacing, 10, 128 - (spacing * 2), 44)
+    chart_point:set_position_and_size(1 + spacing, 10, 128 - (spacing * 2), 52)
 end
 
 -- Runs in the update_data function and on initial script load
@@ -633,14 +513,11 @@ function update_param_options(id, options, default)
     end
 end
 
--- Check if the screen needs redrawing 15 times a second
-function redraw_clock()
-    while true do
-        clock.sleep(1 / 15)
-        if screen_dirty then
-            redraw()
-            screen_dirty = false
-        end
+-- Check if the screen needs redrawing 60 times a second
+function refresh()
+    if screen_dirty then
+        redraw()
+        screen_dirty = false
     end
 end
 
@@ -652,16 +529,5 @@ function redraw_grid_clock()
             redraw_grid()
             grid_dirty = false
         end
-    end
-end
-
--- MIDI support
-function play_midi_note(midi_note)
-    if midi.devices ~= nil then
-        stopping = clock.run(function()
-            my_midi:note_on(midi_note, 100, params:get("midi_channel"))
-            clock.sleep(params:get("midi_length"))
-            my_midi:note_off(midi_note, 100, params:get("midi_channel"))
-        end)
     end
 end
