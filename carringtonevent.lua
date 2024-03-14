@@ -51,15 +51,13 @@ function init()
     stormcolumn = 4
     data_length = 240
 
-    -- Sync variables
-    sync = 1
-    timer = 0
-
     -- SETTING UP
     file_name = "data"
     headers = {}
     grid_drawn = {}
-    flash = 0;
+    flash = 0
+    gridflash = 0
+    elapsed = 0
     loaded = false
 
     -- DATA
@@ -178,6 +176,9 @@ function init()
 
     -- Start a clock to refresh the grid
     redraw_grid_clock_id = clock.run(redraw_grid_clock)
+
+    -- Start a metro to track time that has passed
+    elapsed_metro = metro.init(ticker, 1, -1)
 end
 
 function redraw()
@@ -185,11 +186,11 @@ function redraw()
     screen.clear()
 
     -- flash rectangle across whole screen
-    if flash > 0 then
+    if flash >= 3 then
         if columns.storm[position] == 1 then
             screen.level(10)
         elseif columns.storm[position] == 0.5 then
-            screen.level(1)
+            screen.level(3)
         else
             screen.level(0)
         end
@@ -228,8 +229,8 @@ function redraw()
 
     screen.move(128 - 2, 21)
     -- create a timestring with minutes and seconds as 00m00s
-    local timestring = string.format("%02.f", timer / 60) .. "m" .. string.format("%02.f", timer % 60) .. "s"
-    screen.text_right(timestring)
+    local elapsedstring = string.format("%02.f", elapsed // 60) .. "m" .. string.format("%02.f", elapsed % 60) .. "s"
+    screen.text_right(elapsedstring)
 
     screen.move(128 - 2, 62)
     screen.font_face(18)
@@ -244,6 +245,20 @@ end
 function redraw_grid()
     -- clear the grid
     g:all(0)
+
+    -- flash the grid
+    local gridflashbrightness = 0
+    if columns.storm[position] == 0.5 then gridflashbrightness = 4 end
+    if columns.storm[position] == 1 then gridflashbrightness = 15 end
+
+    -- light the top row of the grid if a storm is happening
+    if gridflash >= 3 then
+        for i = 1, g.cols do
+            for j = 1, g.rows do
+                g:led(i, j, gridflashbrightness)
+            end
+        end
+    end
 
     -- loop over the data and draw the bars
     for i = 1, #grid_drawn do
@@ -260,24 +275,6 @@ function redraw_grid()
         end
     end
 
-    -- flash the grid
-    if flash > 0 then
-        flash = 0
-    else
-        flash = flash + 1
-    end
-
-    local flashbrightness = 0
-    if columns.storm[position] == 0.5 then flashbrightness = 3 end
-    if columns.storm[position] == 1 then flashbrightness = 15 end
-
-    -- light the top row of the grid if a storm is happening
-    for i = 1, g.cols do
-        if columns.storm[position] >= 0.5 and flash > 0 then
-            g:led(i, 1, flashbrightness)
-        end
-    end
-
     -- trigger a grid update
     g:refresh()
 end
@@ -285,8 +282,8 @@ end
 -- start playing the notes
 function play_note()
     declination_volts = map(columns.declination[position], params:get("datamin"), params:get("datamax"), 0, 10, true)
-    horizforce_volts = map(columns.horizforce[position], params:get("datamin"), params:get("datamax"), 0, 10, true)
-    storm_volts = map(columns.storm[position], params:get("datamin"), params:get("datamax"), 0, 5, true)
+    horizforce_volts = map(columns.horizforce[position], 100, -100, 0, 10, true)
+    storm_volts = map(columns.storm[position], 0, 1, 0, 5, true)
 
     -- Send crow outputs
     crow.output[1].volts = declination_volts
@@ -321,18 +318,17 @@ function key(n, z)
     if n == 2 and z == 1 then
         if not clock_playing then
             if midi.devices ~= nil then my_midi:start() end
+            elapsed_metro:start()
             play = clock.run(function()
                 while true do
                     -- Sync to the clock
-                    clock.sync(sync)
+                    clock.sync(1)
 
                     -- Play a note
                     play_note()
 
                     -- Increment position
                     increment_position()
-
-                    timer = position * clock.get_beat_sec()
                 end
             end) -- starts the clock coroutine
             clock_playing = true
@@ -344,7 +340,10 @@ function key(n, z)
     -- Button 3: reset and stop
     if n == 3 and z == 1 then
         position = 1
-        timer = 0
+
+        elapsed_metro:stop()
+        elapsed = 0
+
         stop_play()
         update_chart()
     end
@@ -355,7 +354,8 @@ end
 
 -- stops the coroutine playing the notes
 function stop_play()
-    clock.cancel(play)
+    if (play) then clock.cancel(play) end
+    elapsed_metro:stop()
     if midi.devices ~= nil then my_midi:stop() end
     clock_playing = false
 end
@@ -410,8 +410,9 @@ end
 function increment_position()
     update_chart()
 
-    if (position == #data) then
+    if (position == (#data)) then
         stop_play()
+        elapsed_metro:stop()
     else
         position = position + 1
     end
@@ -515,6 +516,16 @@ end
 
 -- Check if the screen needs redrawing 60 times a second
 function refresh()
+    -- Flash when a storm is happening
+    if columns.storm[position] >= 0.5 then
+        flash = flash + 1
+        gridflash = gridflash + 1
+        if flash == 6 then flash = 0 end
+        if gridflash == 6 then gridflash = 0 end
+        screen_dirty = true
+        grid_dirty = true
+    end
+
     if screen_dirty then
         redraw()
         screen_dirty = false
@@ -524,10 +535,15 @@ end
 -- Check if the grid needs redrawing 10 times a second
 function redraw_grid_clock()
     while true do
-        clock.sleep(1 / 10)
+        clock.sleep(1 / 60)
         if grid_dirty and g.device ~= nil then
             redraw_grid()
             grid_dirty = false
         end
     end
+end
+
+function ticker()
+    elapsed = elapsed + 1
+    screen_dirty = true
 end
