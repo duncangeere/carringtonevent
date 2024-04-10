@@ -116,8 +116,8 @@ function init()
     -- Setting slew of outputs
     crow.output[1].slew = 1.0
     crow.output[2].slew = 1.0
-    crow.output[3].slew = 1.0
-    crow.output[4].slew = 1.0
+    crow.output[3].slew = 2.0
+    crow.output[4].slew = 5.0
 
     -- MIDI
     params:add_separator("MIDI")
@@ -283,12 +283,12 @@ end
 function play_note()
     declination_volts = map(columns.declination[position], params:get("datamin"), params:get("datamax"), 0, 10, true)
     horizforce_volts = map(columns.horizforce[position], 100, -100, 0, 10, true)
-    storm_volts = map(columns.storm[position], 0, 1, 0, 5, true)
+    storm_volts = map(columns.storm[position], 0, 1, 0, 10, true)
 
     -- Send crow outputs
     crow.output[1].volts = declination_volts
-    crow.output[2].volts = declination_volts
-    crow.output[3].volts = horizforce_volts
+    crow.output[2].volts = horizforce_volts
+    crow.output[3].volts = storm_volts
     crow.output[4].volts = storm_volts
 
     -- Play midi
